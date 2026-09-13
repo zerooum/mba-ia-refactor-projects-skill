@@ -126,32 +126,22 @@
 - **Problema:** faz uma query por curso, por matrícula, por usuário e por pagamento.
 - **Por que é relevante:** fica lento conforme a base cresce, quando um único JOIN resolveria.
 
-#### P2-11 · [MEDIUM] Callback hell
-- **Local:** `src/AppManager.js:37-77`
-- **Problema:** usa 5 níveis de callbacks aninhados em vez de async/await.
-- **Por que é relevante:** o código fica difícil de ler e os erros ficam difíceis de tratar.
-
-#### P2-12 · [MEDIUM] Erros ignorados
+#### P2-11 · [MEDIUM] Erros ignorados
 - **Local:** `src/AppManager.js:57, 92, 104, 133`
 - **Problema:** vários callbacks ignoram o `err`, e as respostas misturam texto e JSON.
 - **Por que é relevante:** as falhas passam em silêncio.
 
-#### P2-13 · [MEDIUM] Dados órfãos e banco em memória
+#### P2-12 · [MEDIUM] Dados órfãos e banco em memória
 - **Local:** `src/AppManager.js:7, 131-136`
 - **Problema:** apagar um usuário deixa matrículas e pagamentos órfãos, e o banco é `:memory:`.
 - **Por que é relevante:** os dados ficam inconsistentes e se perdem a cada restart.
 
-#### P2-14 · [LOW] Nomes crípticos
-- **Local:** `src/AppManager.js:29-33`
-- **Problema:** usa variáveis como `u`, `e`, `p`, `cid` e `cc`.
-- **Por que é relevante:** dificulta a leitura.
-
-#### P2-15 · [LOW] Magic strings
+#### P2-13 · [LOW] Strings hardcoded
 - **Local:** `src/AppManager.js:46, 108`
 - **Problema:** `'PAID'`, `'DENIED'` e `"4"` aparecem soltos no código.
 - **Por que é relevante:** um erro de digitação quebra o fluxo sem aviso.
 
-#### P2-16 · [LOW] Código morto
+#### P2-14 · [LOW] Código morto
 - **Local:** `src/AppManager.js:2`, `src/utils.js:2-5`
 - **Problema:** `totalRevenue`, `dbUser`, `dbPass` e `smtpUser` não são usados.
 - **Por que é relevante:** confunde quem lê.

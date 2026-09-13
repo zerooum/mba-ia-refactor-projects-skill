@@ -1,4 +1,6 @@
 @baseUrl = http://localhost:3000
+# lido do .env (extensão REST Client)
+@adminToken = {{$dotenv ADMIN_TOKEN}}
 
 ### Checkout - sucesso
 POST {{baseUrl}}/api/checkout
@@ -26,6 +28,8 @@ Content-Type: application/json
 
 ### Relatório financeiro administrativo
 GET {{baseUrl}}/api/admin/financial-report
+Authorization: Bearer {{adminToken}}
 
-### Deletar usuário
+### Deletar usuário (409 se tiver matrícula, 404 se não existir)
 DELETE {{baseUrl}}/api/users/1
+Authorization: Bearer {{adminToken}}
