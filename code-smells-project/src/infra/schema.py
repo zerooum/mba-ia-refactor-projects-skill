@@ -1,15 +1,16 @@
-import sqlite3
-import os
+import logging
+import secrets
 
-db_connection = None
-db_path = "loja.db"
+from src.models.usuario import eh_hash_senha, gerar_hash_senha
 
-def get_db():
-    global db_connection
-    if db_connection is None:
-        db_connection = sqlite3.connect(db_path, check_same_thread=False)
-        db_connection.row_factory = sqlite3.Row
-        cursor = db_connection.cursor()
+log = logging.getLogger(__name__)
+
+
+def init_db(db, seed_senhas):
+    """Cria as tabelas e semeia dados de exemplo se o banco estiver vazio. Chamado uma vez no boot."""
+    conn = db.conectar()
+    try:
+        cursor = conn.cursor()
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS produtos (
@@ -51,10 +52,10 @@ def get_db():
                 preco_unitario REAL
             )
         """)
-        db_connection.commit()
 
         cursor.execute("SELECT COUNT(*) FROM produtos")
         if cursor.fetchone()[0] == 0:
+            cursor.execute("BEGIN")
             produtos = [
                 ("Notebook Gamer", "Notebook potente para jogos", 5999.99, 10, "informatica"),
                 ("Mouse Wireless", "Mouse sem fio ergonômico", 89.90, 50, "informatica"),
@@ -73,14 +74,34 @@ def get_db():
             )
 
             usuarios = [
-                ("Admin", "admin@loja.com", "admin123", "admin"),
-                ("João Silva", "joao@email.com", "123456", "cliente"),
-                ("Maria Santos", "maria@email.com", "senha123", "cliente"),
+                ("Admin", "admin@loja.com", "admin"),
+                ("João Silva", "joao@email.com", "cliente"),
+                ("Maria Santos", "maria@email.com", "cliente"),
+            ]
+            usuarios = [
+                (nome, email, gerar_hash_senha(seed_senhas.get(email) or secrets.token_urlsafe(32)), tipo)
+                for nome, email, tipo in usuarios
             ]
             cursor.executemany(
                 "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",
                 usuarios
             )
-            db_connection.commit()
+            cursor.execute("COMMIT")
 
-    return db_connection
+        _migrar_senhas_texto_puro(conn)
+    finally:
+        conn.close()
+
+
+def _migrar_senhas_texto_puro(conn):
+    """Bancos criados antes do hash guardam a senha em texto puro: converte para hash, uma vez."""
+    pendentes = [
+        (gerar_hash_senha(row["senha"]), row["id"])
+        for row in conn.execute("SELECT id, senha FROM usuarios").fetchall()
+        if row["senha"] and not eh_hash_senha(row["senha"])
+    ]
+    if pendentes:
+        conn.execute("BEGIN")
+        conn.executemany("UPDATE usuarios SET senha = ? WHERE id = ?", pendentes)
+        conn.execute("COMMIT")
+        log.warning("%d senha(s) em texto puro convertida(s) para hash", len(pendentes))
