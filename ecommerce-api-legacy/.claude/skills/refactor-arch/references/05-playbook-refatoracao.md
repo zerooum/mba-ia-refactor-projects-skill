@@ -1,6 +1,6 @@
 # 05 — Playbook de Refatoração
 
-14 transformações. Cada uma resolve anti-patterns específicos do catálogo.
+15 transformações. Cada uma resolve anti-patterns específicos do catálogo (T-15 resolve o layout exigido em `04-guidelines-mvc.md`).
 
 | ID | Transformação | Resolve | Onda |
 |---|---|---|---|
@@ -18,6 +18,7 @@
 | [T-12](#t-12--extrair-constantes-nomeadas) | Extrair constantes nomeadas | AP-20, AP-21 | 6 |
 | [T-13](#t-13--conexão-e-transação) | Conexão e transação | AP-09, AP-12 | 2 |
 | [T-14](#t-14--callback-hell--asyncawait) | Callback hell → async/await | AP-13 | 3 |
+| [T-15](#t-15--mover-o-código-para-src) | Mover o código para `src/` | layout | 0 |
 
 ---
 
@@ -228,7 +229,7 @@ class ProdutoRepository:
         return Produto.from_row(row) if row else None
 ```
 ```python
-# app.py — composition root
+# src/app.py — composition root
 repo = ProdutoRepository(db)
 controller = ProdutoController(repo)
 ```
@@ -529,7 +530,7 @@ let x = 5  // nunca reatribuído    →  const x = 5
 - Só troque o que está de fato deprecado **na versão declarada no manifesto**.
 - Onda 6: essas trocas são amplas e mecânicas. Feitas antes das estruturais, poluem o diff.
 
-**Validar:** boot com warnings ligados (`python -W error::DeprecationWarning app.py`, `node --throw-deprecation`) sem disparar nada; smoke verde.
+**Validar:** boot com warnings ligados (`python -W error::DeprecationWarning src/app.py`, `node --throw-deprecation src/app.js`) sem disparar nada; smoke verde.
 
 ---
 
@@ -687,3 +688,38 @@ const report = await Promise.all(courses.map(c => this.buildCourseReport(c)));
 - Converta **um fluxo por vez**, rodando o smoke entre eles.
 
 **Validar:** `rg "function\s*\([^)]*err"` só retorna o wrapper de promisificação; erro em query devolve 500 pelo handler central em vez de derrubar o processo; requisição nunca fica pendurada.
+
+---
+
+## T-15 — Mover o código para `src/`
+
+Onda 0, nos três níveis. Layout alvo e exceções de toolchain em `04-guidelines-mvc.md` → Layout.
+
+**Antes**
+```
+app.py  seed.py  database.py  models/  routes/  services/  utils/  requirements.txt  README.md
+```
+
+**Depois**
+```
+src/app.py  src/seed.py  src/infra/database.py  src/models/  src/routes/  src/services/  src/utils/
+requirements.txt  README.md  .env.example
+```
+```bash
+mkdir -p src
+git mv app.py seed.py models routes services utils src/
+```
+```python
+# src/config/settings.py — caminhos de projeto resolvidos a partir da raiz, não do cwd nem de src/
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
+INSTANCE_PATH = str(PROJECT_ROOT / "instance")      # Flask(__name__, instance_path=INSTANCE_PATH)
+```
+
+**Cuidados**
+- **Mova antes de editar.** `git mv` de arquivo intacto vira rename com 100% de similaridade; arquivo já reescrito vira delete + add e o histórico se perde no diff.
+- Só movimentação e ajuste de caminho nesta onda. Renomear camada, dividir arquivo ou mudar import "já que está mexendo" vai para a onda da transformação correspondente.
+- Percorra a tabela "O que quebra ao mover para `src/`" do `04-guidelines-mvc.md`: comando de boot, `.env`, `instance_path` do Flask, SQLite relativo, testes, `main` do `package.json`, Dockerfile, CI, README.
+- Arquivo não rastreado pelo git (projeto sem commit inicial): `mv` comum, e registre no plano que o diff não mostrará rename.
+
+**Validar:** `git status` mostra `R` para os arquivos movidos; a app sobe de outro diretório (`cd /tmp && python <projeto>/src/app.py`); banco continua em `instance/` na raiz; smoke idêntico ao baseline.

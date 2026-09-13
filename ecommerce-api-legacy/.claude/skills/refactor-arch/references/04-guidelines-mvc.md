@@ -2,7 +2,7 @@
 
 Arquitetura alvo da Fase 3.
 
-**Índice:** [Regra de dependência](#regra-de-dependência) · [Camadas](#responsabilidade-por-camada) · [View numa API](#o-que-é-view-numa-api) · [Composition root](#composition-root) · [Estruturas alvo](#estruturas-alvo) · [Adaptação por nível](#adaptação-por-nível-de-organização) · [Critérios de pronto](#critérios-de-pronto)
+**Índice:** [Regra de dependência](#regra-de-dependência) · [Camadas](#responsabilidade-por-camada) · [View numa API](#o-que-é-view-numa-api) · [Composition root](#composition-root) · [Layout src/](#layout-todo-código-da-aplicação-em-src) · [Estruturas alvo](#estruturas-alvo) · [Adaptação por nível](#adaptação-por-nível-de-organização) · [Critérios de pronto](#critérios-de-pronto)
 
 ---
 
@@ -53,7 +53,7 @@ Em app não-HTTP, View é a camada de entrada que existir: comando de CLI, consu
 O entrypoint monta o grafo de objetos e não faz mais nada:
 
 ```python
-# app.py — composition root
+# src/app.py — composition root
 def create_app(config=None):
     app = Flask(__name__)
     app.config.from_object(config or Settings())
@@ -73,6 +73,47 @@ Consequências obrigatórias:
 - Nada de DDL, seed ou `create_all()` rodando no import do módulo — só dentro da factory ou de um comando explícito.
 - Nada de conexão criada em nível de módulo.
 - A factory aceita config alternativa (é o que torna a app testável).
+
+---
+
+## Layout: todo código da aplicação em `src/`
+
+Vale para os três níveis de organização. O projeto refatorado tem esta forma:
+
+```
+<projeto>/
+├── src/                 # TODO código da aplicação: entrypoint, seed, camadas
+├── reports/             # relatório da auditoria
+├── <manifesto>          # requirements.txt / pyproject.toml / package.json + lockfile
+├── .env.example  .gitignore  README.md
+└── Dockerfile, CI, docs/   (se existirem)
+```
+
+A raiz guarda só arquivos **do projeto**; nenhum `.py`/`.js` da aplicação e nenhum diretório de camada fica fora de `src/`.
+
+| Manifesto presente | Layout |
+|---|---|
+| `pom.xml` ou `build.gradle` | O da toolchain: `src/main/java/...` (já é `src/`) |
+| `go.mod` | O da toolchain: `cmd/<app>/` + `internal/` |
+| Qualquer outro | `src/` |
+
+A mudança para `src/` é a **onda 0** da Fase 3 (T-15): `git mv` puro, antes de qualquer edição, para o git registrar os arquivos como rename com 100% de similaridade. Movidos depois de editados, eles aparecem como delete + add.
+
+### O que quebra ao mover para `src/`
+
+Confira cada item antes de rodar o smoke da onda 0:
+
+| Item | Sintoma | Correção |
+|---|---|---|
+| Comando de boot | `python app.py` não acha o arquivo | `python src/app.py` / `node src/app.js`; atualize `scripts` do `package.json`, `Procfile`, `Dockerfile`, CI e README |
+| Caminho relativo a `__file__` / `__dirname` | `.env`, templates ou arquivos estáticos não carregam | Resolva a partir da raiz do projeto (`Path(__file__).resolve().parents[N]`) |
+| Flask `instance_path` | SQLite `sqlite:///x.db` passa a criar `src/instance/x.db` e o banco "some" | `Flask(__name__, instance_path=<raiz>/instance)` ou `DATABASE_URL` absoluto |
+| SQLite relativo ao cwd (driver cru, Node) | Banco criado em outro diretório | Caminho do banco via config, resolvido a partir da raiz |
+| Imports | `ModuleNotFoundError` / `Cannot find module` | Python: `python src/app.py` põe `src/` no `sys.path`, então imports absolutos entre módulos de `src/` continuam valendo. Node: `require` relativo entre arquivos movidos juntos continua valendo. Ajuste só o import que atravessa a fronteira `src/` ↔ raiz |
+| Testes | pytest/jest não acham os módulos | `pythonpath = src` no `pytest.ini`/`pyproject.toml`; `roots`/`moduleDirectories` no jest |
+| `main` do `package.json` | `npm start` quebra | `"main": "src/app.js"` |
+
+**Validar:** app sobe a partir de outro diretório (`cd /tmp && python <projeto>/src/app.py`); banco e `.env` continuam na raiz; smoke idêntico ao baseline.
 
 ---
 
@@ -124,19 +165,20 @@ src/
 
 ### Genérico
 
-`config/ · models/ · controllers/ · views|routes/ · middlewares/ · infra/ · entrypoint`
+`src/` → `config/ · models/ · controllers/ · views|routes/ · middlewares/ · infra/ · entrypoint`
 
-Adapte os nomes à convenção da linguagem (`internal/` em Go, `src/main/java/...` em Java). **Não force `src/` onde a convenção da stack não usa.** O que importa é a separação, não o nome do diretório.
+O container é sempre o da tabela de [Layout](#layout-todo-código-da-aplicação-em-src). Dentro dele, o nome de cada camada pode seguir o que o projeto já usa (ver Nível 2).
 
 ---
 
 ## Adaptação por nível de organização
 
-A Fase 3 **não aplica a mesma receita nos três níveis**. Use o nível detectado na Fase 1.
+A Fase 3 **não aplica a mesma receita nos três níveis**. Use o nível detectado na Fase 1. O que os três têm em comum: a onda 0 leva o código para `src/` (T-15) antes de qualquer outra mudança.
 
 ### Nível 1 — Monolito flat
-Extração completa.
-1. Config e segredos para `config/` (T-01)
+Extração completa, com todo arquivo novo nascendo em `src/`.
+0. `git mv` do entrypoint e dos módulos soltos para `src/` (T-15)
+1. Config e segredos para `src/config/` (T-01)
 2. Cada domínio do God File vira um model (T-03, T-05)
 3. Regra de negócio dos handlers vai para controllers (T-04)
 4. Rotas viram blueprints/routers finos (T-03)
@@ -144,8 +186,9 @@ Extração completa.
 6. Error handler central (T-07)
 
 ### Nível 2 — Camadas nominais
-Os diretórios já existem; a responsabilidade não. **Não recrie a estrutura, preencha-a.**
-1. Config e segredos primeiro (T-01)
+Os diretórios de camada já existem; a responsabilidade não. **Mova-os para `src/` e preencha-os** — não os recrie nem os renomeie.
+0. `git mv` de cada diretório de camada, do entrypoint e do seed para `src/` (T-15). Mantenha os nomes: um `services/` existente assume o papel de controller; `routes/` assume o de view
+1. Config e segredos (T-01)
 2. Resolva a camada fantasma (AP-14): cada módulo não usado ou passa a ser consumido, ou é removido — **decida um e registre a decisão**
 3. Mova regra de negócio das rotas para controllers/services (T-04)
 4. Reaproveite método de model já existente e não chamado antes de escrever qualquer lógica nova
@@ -156,7 +199,7 @@ Os diretórios já existem; a responsabilidade não. **Não recrie a estrutura, 
 **Cuidado específico:** mover rota entre blueprints pode mudar a ordem de registro. Rota estática (`/tasks/search`) e rota com parâmetro (`/tasks/<id>`) no mesmo prefixo colidem se o converter de tipo for removido. Preserve os converters (`<int:id>`) exatamente como estão, ou registre a estática antes.
 
 ### Nível 3 — Camadas reais
-Sem reestruturação. Foco em segurança, performance (T-08), validação (T-09), API deprecated (T-11) e higiene (T-12). Propor reorganização aqui é mudança não solicitada.
+Sem reestruturação de responsabilidades. A única mudança estrutural é a onda 0: se o código está fora de `src/`, `git mv` para `src/` (T-15), mantendo nomes e divisão de arquivos. Depois, foco em segurança, performance (T-08), validação (T-09), API deprecated (T-11) e higiene (T-12).
 
 ---
 
@@ -164,7 +207,9 @@ Sem reestruturação. Foco em segurança, performance (T-08), validação (T-09)
 
 A Fase 3 só termina com todos verificados:
 
-- [ ] Estrutura de diretórios segue o padrão MVC da stack
+- [ ] Todo código da aplicação dentro de `src/` (ou no layout da toolchain, pela tabela de Layout); raiz só com arquivos do projeto
+- [ ] Estrutura de diretórios dentro de `src/` segue o padrão MVC da stack
+- [ ] App sobe a partir de outro diretório de trabalho, com `.env` e banco resolvidos na raiz
 - [ ] Configuração em módulo próprio, lendo env var, sem valor hardcoded
 - [ ] Models abstraem os dados; nenhum SQL fora deles
 - [ ] Views/Routes finas: sem query, sem cálculo de negócio

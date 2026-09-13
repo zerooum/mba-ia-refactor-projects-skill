@@ -8,21 +8,21 @@ Sem suíte de testes, a única prova objetiva é: **a app sobe e todos os endpoi
 
 ## 1. Subir a aplicação
 
-Comando vem do manifesto e do entrypoint detectados na Fase 1.
+Comando vem do manifesto e do entrypoint detectados na Fase 1. O baseline usa o caminho **original**; da onda 0 (T-15) em diante o entrypoint está em `src/`. O smoke compara HTTP, então o baseline continua válido depois da mudança de caminho.
 
-| Stack | Boot | Porta padrão |
-|---|---|---|
-| Flask | `python app.py` ou `flask --app app run` | 5000 |
-| FastAPI | `uvicorn main:app` | 8000 |
-| Django | `python manage.py runserver` | 8000 |
-| Express | `npm start` (veja `scripts` no `package.json`) | 3000 |
-| Go | `go run .` | variável |
+| Stack | Boot antes da onda 0 | Boot depois da onda 0 | Porta padrão |
+|---|---|---|---|
+| Flask | `python app.py` | `python src/app.py` | 5000 |
+| FastAPI | `uvicorn main:app` | `uvicorn --app-dir src main:app` | 8000 |
+| Django | `python manage.py runserver` | `python src/manage.py runserver` | 8000 |
+| Express | `npm start` | `npm start` com `scripts.start` → `node src/app.js` | 3000 |
+| Go | `go run .` | `go run ./cmd/<app>` | variável |
 
 Rode **em background** e guarde o log:
 
 ```bash
 cd <projeto>
-python app.py > .refactor-arch/boot.log 2>&1 &
+python src/app.py > .refactor-arch/boot.log 2>&1 &     # antes da onda 0: python app.py
 echo $! > .refactor-arch/app.pid
 ```
 
@@ -124,7 +124,13 @@ rg -n "cursor\.execute|\.query\.|db\.session" --glob '*rout*' --glob '*view*'
 rg -n "request\.|jsonify|res\.json" --glob '*model*'
 
 # boot sem warning de deprecação
-python -W error::DeprecationWarning app.py    # ou: node --throw-deprecation src/app.js
+python -W error::DeprecationWarning src/app.py    # ou: node --throw-deprecation src/app.js
+
+# layout: nenhum código da aplicação fora de src/ (exceto layout de toolchain, ver 04-guidelines-mvc.md)
+find . -maxdepth 1 -type f \( -name '*.py' -o -name '*.js' -o -name '*.ts' \) ! -name '*.config.*'
+
+# app sobe fora da raiz, com .env e banco resolvidos a partir dela
+cd /tmp && python <projeto>/src/app.py
 ```
 
 Todos vazios + smoke verde = Fase 3 aprovada.

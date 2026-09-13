@@ -35,6 +35,7 @@ Valem nas 3 fases. Se um raciocínio seu levar a violar uma delas, o raciocínio
 | **Refatorar é mover, não reescrever** | A regra de negócio existente é transportada para a camada certa. Você não inventa comportamento novo nem "melhora" a regra de negócio de passagem. |
 | **Segredo nunca migra de lugar em texto puro** | Vai para variável de ambiente. `.env.example` recebe placeholder (`CHANGE_ME`), nunca o valor real. `.env` entra no `.gitignore`. |
 | **Onda que quebra o smoke é revertida** | Não se acumula quebra "para arrumar no final". Reverte, corrige a abordagem, repete. |
+| **Código da aplicação termina em `src/`** | Nos 3 níveis de organização. Na raiz ficam só manifesto, lockfile, `.env.example`, `.gitignore`, docs e `reports/`. Outro layout só quando `pom.xml`, `build.gradle` ou `go.mod` o definem (`04-guidelines-mvc.md` → Layout). |
 
 ### Racionalizações proibidas
 
@@ -46,6 +47,9 @@ Valem nas 3 fases. Se um raciocínio seu levar a violar uma delas, o raciocínio
 | "A app nem subia antes, não dá pra comparar" | Se não sobe, isso é o primeiro finding CRITICAL. O baseline vira "não boota" e a Fase 3 tem que fazer subir. |
 | "São só 3 arquivos, faço tudo de uma vez" | Ondas existem para localizar a quebra. Sem elas, um smoke vermelho não diz o que causou. |
 | "O projeto já tem `services/`, então tem camada de serviço" | Diretório não é camada. Confira se o módulo é importado e se a dependência flui numa direção só. |
+| "As camadas já existem na raiz; mover para `src/` seria recriar a estrutura" | Mover não é recriar. É `git mv` na onda 0, com os mesmos nomes de diretório. Nível 2 preenche as camadas **dentro de `src/`**. |
+| "Essa stack não costuma usar `src/`" | Só `pom.xml`, `build.gradle` e `go.mod` definem outro layout. Flask, FastAPI, Django, Express e afins vão para `src/`. |
+| "Movo para `src/` no final, quando o código estiver pronto" | Arquivo editado e movido depois aparece como delete + add, e o histórico some do diff. Mova primeiro, intacto. |
 
 ---
 
@@ -150,6 +154,7 @@ Ordem fixa. Após **cada** onda: suba a app, rode `scripts/smoke.sh`, compare co
 
 | # | Onda | Transformações típicas |
 |---|---|---|
+| 0 | Layout `src/` (`git mv` puro + ajuste de caminhos) | T-15 |
 | 1 | Config e segredos | T-01 |
 | 2 | Camada de dados | T-02, T-05, T-13 |
 | 3 | Camada de negócio | T-03, T-04, T-08, T-14 |
@@ -157,7 +162,7 @@ Ordem fixa. Após **cada** onda: suba a app, rode `scripts/smoke.sh`, compare co
 | 5 | Error handling e validação | T-07, T-09, T-10 |
 | 6 | Higiene | T-11, T-12 |
 
-Mova código com `git mv` quando for movimentação pura, para o diff mostrar rename em vez de delete+add.
+Mova código com `git mv` quando for movimentação pura, para o diff mostrar rename em vez de delete+add. A onda 0 roda antes de qualquer edição: é ela que garante o rename com 100% de similaridade.
 
 ### 3.3 Valide
 
@@ -165,7 +170,8 @@ Siga `references/06-validacao.md`. Aprovação exige **todos**:
 
 - App boota sem exceção
 - `scripts/smoke.sh .refactor-arch/depois` + `diff` dos `.status` contra o baseline: zero divergência
-- Estrutura de diretórios segue `04-guidelines-mvc.md`
+- Código da aplicação dentro de `src/` e a app sobe a partir de outro diretório de trabalho (`04-guidelines-mvc.md` → Layout)
+- Estrutura de diretórios dentro de `src/` segue `04-guidelines-mvc.md`
 - Nenhum segredo literal restante no código-fonte
 - Zero finding CRITICAL ou HIGH remanescente
 
@@ -185,6 +191,7 @@ CRITICAL: <n>/<n> | HIGH: <n>/<n> | MEDIUM: <n>/<n> | LOW: <n>/<n>
 
 ## Validation
   [x|!] Application boots without errors
+  [x|!] Application code under src/, boots from any working directory
   [x|!] All <N> endpoints match baseline status
   [x|!] No hardcoded secrets in source
   [x|!] Zero CRITICAL/HIGH findings remaining
