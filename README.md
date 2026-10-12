@@ -305,3 +305,202 @@ Além da lista, o catálogo traz:
 
 **6. Segredos que continuam no histórico do git.** Mover a `SECRET_KEY` para variável de ambiente não apaga o valor dos commits antigos.
 **Solução:** o `.env.example` recebe só placeholder (`CHANGE_ME`), o `.env` vai para o `.gitignore`, e o relatório final de cada projeto termina com a ação obrigatória de rotacionar os segredos expostos.
+
+---
+
+## Resultados
+
+### Resumo das auditorias
+
+Relatórios completos em `<projeto>/reports/audit-<projeto>.md`.
+
+| Projeto | Stack detectada | Arquivos / LOC | Endpoints | CRITICAL | HIGH | MEDIUM | LOW | Total |
+|---|---|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| `code-smells-project` | Python 3 + Flask 3.1.1 + `sqlite3` cru | 4 / 780 | 19 | 6 | 7 | 4 | 2 | **19** |
+| `ecommerce-api-legacy` | Node.js 22 + Express 4.22.1 + `sqlite3` 5.1.7 | 3 / 180 | 3 | 6 | 6 | 4 | 2 | **18** |
+| `task-manager-api` | Python 3 + Flask 3.0.0 + Flask-SQLAlchemy 3.1.1 | 14 / 1158 | 22 | 4 | 6 | 4 | 3 | **17** |
+
+Comparado à análise manual (16 / 16 / 15), a skill encontrou mais findings em todos os projetos. A diferença vem principalmente de anti-patterns que a análise manual não separou: acoplamento sem injeção de dependência (AP-08), camada pulada (AP-10), configuração insegura (AP-19) e dependências com vulnerabilidade conhecida (AP-18).
+
+Situação dos findings após a Fase 3:
+
+| Projeto | Resolvidos | Parciais / residuais |
+|---|:-:|---|
+| `code-smells-project` | 16/19 | AP-05 (só `/admin/*` ganhou guard), AP-16 (formato de email e política de senha), AP-19 (rate limit e paginação) — todos mudariam o contrato e não foram aprovados |
+| `ecommerce-api-legacy` | 17/18 | AP-18 — 7 vulnerabilidades na cadeia de build do `sqlite3@5` só saem com o major `sqlite3@6` |
+| `task-manager-api` | 14/17 | AP-16 (senha de 4 caracteres, regex de email), AP-19 (paginação, rate limit), AP-02 LOW (escape de `%`/`_` no LIKE) |
+
+### Estrutura antes e depois
+
+**1. code-smells-project** — monolito flat → camadas em `src/`
+
+```
+ANTES                         DEPOIS
+app.py          (88)          app.py                  # launcher: python app.py continua valendo
+controllers.py  (292)         src/
+database.py     (86)          ├── app.py              # create_app (composition root)
+models.py       (314)         ├── config/settings.py
+                              ├── infra/              # database, schema, notificador
+                              ├── models/             # entidades + *_repository + errors
+                              ├── controllers/        # pedido, produto, usuario, relatorio, sistema
+                              ├── views/              # *_routes + serializers
+                              └── middlewares/        # auth (X-Admin-Token), error_handler
+```
+
+**2. ecommerce-api-legacy** — God Class → camadas em `src/`
+
+```
+ANTES                         DEPOIS
+src/app.js         (14)       src/
+src/AppManager.js  (141)      ├── app.js              # entrypoint + composition root
+src/utils.js       (25)       ├── config/index.js     # tudo via env
+                              ├── infra/              # db (promises + transação), schema, seed,
+                              │                       # password, paymentGateway, cache, logger
+                              ├── models/             # user, course, enrollment, auditLog,
+                              │                       # financialReport (1 JOIN), constants, errors
+                              ├── controllers/        # checkout, financialReport, user
+                              ├── routes/             # checkout, admin, user + serializers
+                              └── middlewares/        # auth, validate, rateLimit, asyncHandler, errorHandler
+```
+
+**3. task-manager-api** — camadas nominais → camadas reais em `src/`
+
+```
+ANTES                                   DEPOIS
+app.py, database.py, seed.py            src/
+models/      (task, user, category)     ├── app.py, seed.py
+routes/      (task 299, user 211,       ├── config/settings.py
+              report 223 linhas)        ├── infra/database.py
+services/    (notification: nunca       ├── models/        # entidades + *_repository + constants + errors
+              importado)                ├── services/      # task, user, category, report, auth
+utils/helpers.py (quase nada usado)     ├── routes/        # task, user, category, report, health
+                                        │                  # (finas: 17-53 linhas) + serializers + params
+                                        ├── middlewares/   # auth (token assinado), error_handler
+                                        └── utils/helpers.py
+```
+
+As rotas de categoria saíram do blueprint de relatórios, `NotificationService`, `marshmallow` e `requests` foram removidos, e `is_overdue`/`validate_*`/`is_admin` passaram a ser usados.
+
+### Checklist de validação
+
+Legenda: `[x]` verificado · `[!]` verificado com ressalva.
+
+| Item | code-smells-project | ecommerce-api-legacy | task-manager-api |
+|---|:-:|:-:|:-:|
+| **Fase 1 — Análise** | | | |
+| Linguagem detectada corretamente | [x] | [x] | [x] |
+| Framework detectado corretamente | [x] | [x] | [x] |
+| Domínio da aplicação descrito corretamente | [x] e-commerce | [x] LMS de cursos pagos | [x] gerenciador de tarefas |
+| Número de arquivos analisados condiz com a realidade | [x] 4 | [x] 3 | [!] 14 (são 15 `.py`; LOC 1158 bate) |
+| **Fase 2 — Auditoria** | | | |
+| Relatório segue o template definido nos arquivos de referência | [x] | [x] | [x] |
+| Cada finding tem arquivo e linhas exatos | [x] | [x] | [x] |
+| Findings ordenados por severidade (CRITICAL → LOW) | [x] | [x] | [x] |
+| Mínimo de 5 findings identificados | [x] 19 | [x] 18 | [x] 17 |
+| Detecção de APIs deprecated incluída (se aplicável) | [x] nenhuma API; deps vulneráveis | [x] | [x] |
+| Skill pausa e pede confirmação antes da Fase 3 | [x] | [x] | [x] |
+| **Fase 3 — Refatoração** | | | |
+| Estrutura de diretórios segue padrão MVC | [x] | [x] | [x] |
+| Configuração extraída para módulo de config (sem hardcoded) | [x] | [x] | [x] |
+| Models criados para abstrair dados | [x] | [x] | [x] |
+| Views/Routes separadas para visualização ou roteamento | [x] `views/` | [x] `routes/` | [x] `routes/` |
+| Controllers concentram o fluxo da aplicação | [x] | [x] | [x] papel exercido por `services/` |
+| Error handling centralizado | [x] | [x] | [x] |
+| Entry point claro | [!] `src/app.py` + launcher na raiz | [x] `npm start` → `src/app.js` | [x] `src/app.py` |
+| Aplicação inicia sem erros | [x] | [x] | [x] |
+| Endpoints originais respondem corretamente | [x] 30/33 + 3 intencionais | [x] 7/9 + 2 intencionais | [x] 65/65 |
+
+Checagens finais do `06-validacao.md`, rodadas nos 3 `src/`: nenhum segredo literal, nenhuma query concatenada, nenhum `except:`/`catch {}` vazio, nenhuma rota/controller acessando o banco e nenhum model usando objetos HTTP. O único resultado do grep de API deprecated é uma docstring em `task-manager-api/src/utils/helpers.py:8` que menciona `datetime.utcnow()`.
+
+### Logs das aplicações após a refatoração
+
+Execução de 2026-10-12, com banco limpo, comparando o `.status` de cada requisição com o baseline gravado na Fase 1 (antes de qualquer alteração).
+
+**code-smells-project** — `bash .refactor-arch/run-smoke.sh .refactor-arch/readme-final app.py`
+
+```
+INFO __main__: Servidor iniciado em http://0.0.0.0:5000
+ * Serving Flask app 'src.app'
+ * Debug mode: off
+...
+ok     200  /relatorios/vendas                            GET
+ok     401  /admin/query                                  POST
+ok     200  /produtos/11                                  DELETE
+ok     404  /produtos/9999                                DELETE
+ok     401  /admin/reset-db                               POST
+---
+rotas: 33 | respondeu: 33 | falhou (5xx/conexao): 0
+
+diff contra baseline:
+DIVERGE 029-POST-admin-query.status: 200 -> 401      # BC-3 aprovado no GATE
+DIVERGE 030-POST-admin-query.status: 400 -> 401      # BC-3
+DIVERGE 033-POST-admin-reset-db.status: 200 -> 401   # BC-3
+```
+
+**ecommerce-api-legacy** — mesmo smoke, com `Authorization: Bearer $ADMIN_TOKEN`
+
+```
+> node src/app.js
+Frankenstein LMS rodando na porta 3000...
+Processando cartão ****4444                 # antes: número completo + chave do gateway
+ok     200  /api/checkout                                 POST
+ok     200  /api/checkout                                 POST
+ok     400  /api/checkout                                 POST
+ok     404  /api/checkout                                 POST
+ok     400  /api/checkout                                 POST
+ok     200  /api/admin/financial-report                   GET
+ok     409  /api/users/1                                  DELETE
+ok     200  /api/admin/financial-report                   GET
+ok     404  /api/users/999                                DELETE
+rotas: 9 | respondeu: 9 | falhou (5xx/conexao): 0
+
+diff contra baseline:
+DIVERGE 007-DELETE-api-users-1.status: 200 -> 409    # BC-5: usuário com pagamento
+DIVERGE 009-DELETE-api-users-999.status: 200 -> 404  # BC-5: usuário inexistente
+```
+
+Sem token, as rotas admin e o `DELETE` respondem `401` (BC-1).
+
+**task-manager-api** — smoke com token de admin + contrato novo
+
+```
+Seed concluído com sucesso!
+ * Serving Flask app 'app'
+ * Debug mode: off
+...
+ok     200  /tasks/stats                                  GET
+ok     200  /reports/summary                              GET
+ok     200  /tasks/12                                     DELETE
+ok     404  /tasks/999                                    DELETE
+ok     200  /categories/5                                 DELETE
+ok     404  /users/999                                    DELETE
+---
+rotas: 65 | respondeu: 65 | falhou (5xx/conexao): 0
+status idênticos ao baseline: 65/65
+
+.refactor-arch/check-contract.sh
+contrato novo: 48 ok | 0 falhas
+```
+
+O projeto 3 também sobe a partir de outro diretório (`cd /tmp && python <projeto>/src/app.py`), o que confirma que `.env` e banco são resolvidos a partir da raiz do projeto.
+
+### Comportamento da skill em stacks diferentes
+
+**Detecção.** A stack foi identificada corretamente nos 3 projetos, inclusive versões exatas de dependências. No projeto 2, a skill ignorou o nome do repositório (`ecommerce`) e descreveu o domínio real (LMS de cursos pagos) a partir das tabelas e rotas.
+
+**Mesmo catálogo, achados diferentes.** O catálogo é o mesmo nas 3 cópias, mas o resultado mudou conforme o código:
+- **Flask + `sqlite3` cru:** SQL injection (AP-02) foi o finding central, com 22 queries concatenadas.
+- **Express + callbacks:** nenhuma SQL injection, e o relatório registra explicitamente o falso positivo do template literal em `AppManager.js:57`. Em compensação apareceram callback hell (AP-13) e o crash do processo por `card` numérico, promovido a CRITICAL por estar no caminho de pagamento.
+- **Flask + SQLAlchemy:** o foco passou para camada fantasma (AP-14) e camada pulada (AP-10), com números objetivos (75 acessos ao banco direto nas rotas, `services/` nunca importado). O `like(f'%{q}%')` foi rebaixado a LOW porque o ORM parametriza.
+
+**Receita por nível de organização.** Os projetos 1 e 2 (monolito flat) receberam a mesma sequência de ondas, apesar de serem de linguagens diferentes. O projeto 3 (camadas nominais) teve um plano diferente: decidir, para cada módulo morto, se seria ativado ou removido, em vez de criar camadas do zero.
+
+**Particularidades por stack.**
+- No Express, a transação do checkout exigiu converter o driver de callback para promises (`infra/db.js`) antes de mover a regra de negócio. Foi a maior reescrita entre os três projetos.
+- No Flask com SQLAlchemy, `onupdate` não dispara quando nenhuma coluna muda, então o `updated_at` explícito em `update_task` foi mantido. O relatório registra essa correção da própria auditoria.
+- Os 3 projetos rodaram antes da regra da onda 0 existir (ver Desafio 1): no projeto 1 o `app.py` da raiz ficou como launcher, e no projeto 3 a ida para `src/` ficou para a última onda (7).
+
+**Limites observados.**
+- O smoke compara só status HTTP, então mudanças de corpo (mensagens unificadas, 404 em JSON) foram verificadas por scripts auxiliares (`check-contract.sh`, `bc-checks.sh`) que a skill gerou durante a Fase 3. Esses scripts não fazem parte da skill.
+- A contagem de arquivos no projeto 3 ficou com 1 a menos que o real (14 vs 15), enquanto a de linhas bateu.
+- Todo item que mudaria o contrato e não foi aprovado no GATE ficou como residual documentado, em vez de ser aplicado silenciosamente. Por isso nenhum projeto fechou 100% dos findings.
