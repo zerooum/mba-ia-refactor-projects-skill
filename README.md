@@ -504,3 +504,148 @@ O projeto 3 também sobe a partir de outro diretório (`cd /tmp && python <proje
 - O smoke compara só status HTTP, então mudanças de corpo (mensagens unificadas, 404 em JSON) foram verificadas por scripts auxiliares (`check-contract.sh`, `bc-checks.sh`) que a skill gerou durante a Fase 3. Esses scripts não fazem parte da skill.
 - A contagem de arquivos no projeto 3 ficou com 1 a menos que o real (14 vs 15), enquanto a de linhas bateu.
 - Todo item que mudaria o contrato e não foi aprovado no GATE ficou como residual documentado, em vez de ser aplicado silenciosamente. Por isso nenhum projeto fechou 100% dos findings.
+
+---
+
+## Como Executar
+
+### Pré-requisitos
+
+| Ferramenta | Versão usada | Para quê |
+|---|---|---|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) | 2.1.x, autenticado (`claude` → `/login`) | Executar a skill |
+| Python | 3.12 | Projetos 1 e 3 |
+| Node.js | 22 (mínimo 20.12) | Projeto 2 |
+| `git`, `curl`, `bash` | — | Checkpoint, smoke test e validação |
+
+A skill fica em `.claude/skills/refactor-arch/` dentro de cada projeto. As três cópias são idênticas (`diff -r` vazio). O Claude Code só carrega skills do projeto se for iniciado **dentro da pasta do projeto**.
+
+A Fase 2 termina com um GATE que usa `AskUserQuestion`, então a skill precisa rodar em **modo interativo**. Não use `claude -p`.
+
+### Executar a skill
+
+Os projetos deste repositório já estão refatorados. Para reproduzir a execução sobre o código original, crie um worktree no commit inicial e copie a skill para cada projeto:
+
+```bash
+git worktree add ../refactor-original 6d1ce62
+for p in code-smells-project ecommerce-api-legacy task-manager-api; do
+  cp -r "$p/.claude" "../refactor-original/$p/"
+done
+cd ../refactor-original
+```
+
+Depois, rode em cada projeto:
+
+```bash
+# Projeto 1 — Python/Flask
+cd code-smells-project
+pip install -r requirements.txt
+claude "/refactor-arch"
+
+# Projeto 2 — Node.js/Express
+cd ../ecommerce-api-legacy
+npm install
+claude "/refactor-arch"
+
+# Projeto 3 — Python/Flask + SQLAlchemy
+cd ../task-manager-api
+pip install -r requirements.txt
+python seed.py
+claude "/refactor-arch"
+```
+
+Com uma sessão já aberta na pasta do projeto, basta digitar `/refactor-arch` ou pedir "faça uma auditoria de arquitetura".
+
+O que acontece em cada execução:
+
+1. **Fases 0 e 1 (somente leitura):** a skill detecta a stack, monta o inventário de rotas em `.refactor-arch/rotas.tsv`, sobe a aplicação e grava o baseline com o `smoke.sh`.
+2. **Fase 2:** gera `reports/audit-<projeto>.md`.
+3. **GATE:** a skill para e pergunta se deve prosseguir, prosseguir com commit de checkpoint, ou abortar. Os *breaking changes propostos* do relatório também são aprovados ou recusados nesse ponto.
+4. **Fase 3:** refatora em ondas, rodando o smoke depois de cada uma, e acrescenta o resultado final ao relatório.
+
+`.refactor-arch/` é o diretório de trabalho da skill (baseline, logs de cada onda, plano). Ele entra no `.gitignore` e não faz parte do entregável.
+
+### Rodar os projetos refatorados
+
+Os três projetos leem a configuração do `.env`. O `.env.example` traz placeholders `CHANGE_ME` que **precisam ser trocados** antes do boot.
+
+```bash
+# Projeto 1 — http://localhost:5000
+cd code-smells-project
+pip install -r requirements.txt
+cp .env.example .env      # SECRET_KEY, ADMIN_TOKEN, SEED_SENHA_*
+python app.py
+
+# Projeto 2 — http://localhost:3000
+cd ecommerce-api-legacy
+npm install
+cp .env.example .env      # PAYMENT_GATEWAY_KEY, ADMIN_TOKEN
+npm start
+
+# Projeto 3 — http://localhost:5000
+cd task-manager-api
+pip install -r requirements.txt
+cp .env.example .env      # SECRET_KEY: python -c "import secrets; print(secrets.token_hex(32))"
+python src/seed.py
+python src/app.py
+```
+
+Os projetos 1 e 3 usam a porta 5000; rode um de cada vez ou mude `PORT` no `.env`.
+
+### Validar a refatoração
+
+**1. Smoke test contra o baseline.** Esta é a validação que a skill faz em cada onda. Depende do `.refactor-arch/` criado na Fase 1, ou seja, está disponível no projeto onde a skill rodou. Com a app no ar:
+
+```bash
+BASE_URL=http://localhost:5000 \
+  bash .claude/skills/refactor-arch/scripts/smoke.sh .refactor-arch/depois
+
+diff -r .refactor-arch/baseline .refactor-arch/depois --include='*.status' && echo "SMOKE OK"
+```
+
+Toda divergência precisa estar listada no relatório como breaking change aprovado. As divergências esperadas em cada projeto estão em [Resultados → Logs](#logs-das-aplicações-após-a-refatoração). No projeto 2, use `BASE_URL=http://localhost:3000`.
+
+**2. Checagem manual com `curl`.** Não depende do `.refactor-arch/`. Cada bloco confirma que a app responde e que uma correção da auditoria está ativa. As saídas abaixo foram obtidas com os projetos deste repositório.
+
+```bash
+# Projeto 1
+curl -s localhost:5000/health
+# {"ambiente":"producao","counts":{...},"database":"connected","debug":false,...}   ← sem secret_key
+curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:5000/admin/query \
+  -H "Content-Type: application/json" -d '{"sql":"SELECT 1"}'
+# 401   ← sem X-Admin-Token
+curl -s -X POST localhost:5000/pedidos -H "Content-Type: application/json" \
+  -d '{"usuario_id":1,"itens":[{"produto_id":1,"quantidade":-5}]}'
+# {"erro":"Quantidade deve ser maior que zero"}   ← antes: 201 e estoque aumentava
+
+# Projeto 2
+curl -s -X POST localhost:3000/api/checkout -H "Content-Type: application/json" \
+  -d '{"usr":"Ana","eml":"ana@teste.com","pwd":"senhaforte","c_id":1,"card":"4111222233334444"}'
+# {"msg":"Sucesso","enrollment_id":2}
+curl -s -w " %{http_code}\n" -X POST localhost:3000/api/checkout -H "Content-Type: application/json" \
+  -d '{"usr":"Ana","eml":"ana@teste.com","pwd":"senhaforte","c_id":1,"card":4111}'
+# Bad Request 400   ← antes: derrubava o processo
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" localhost:3000/api/admin/financial-report
+# [{"course":"Clean Architecture","revenue":1994,"students":[...]}, ...]   ← sem token: 401
+
+# Projeto 3
+curl -s -o /dev/null -w "%{http_code}\n" localhost:5000/tasks
+# 401   ← antes: aberto
+curl -s -X POST localhost:5000/login -H "Content-Type: application/json" \
+  -d '{"email":"joao@email.com","password":"1234"}'
+# {"message":"Login realizado com sucesso","token":"...","user":{...}}   ← sem "password" no user
+curl -s localhost:5000/tasks -H "Authorization: Bearer <token>"
+# [{"category_id":1,"category_name":"Backend",...}, ...]
+```
+
+**3. Checagens estáticas.** São as mesmas buscas da seção 5 de `references/06-validacao.md`, rodadas dentro de `src/`. O resultado esperado é vazio em todas:
+
+```bash
+grep -rEni "(secret|password|api[_-]?key|token)\s*[:=]\s*['\"][^'\"]{4,}" src   # segredo literal
+grep -rEn  "datetime\.utcnow|\.query\.get\(|new Buffer\(|url\.parse\(" src      # API deprecated
+grep -rEn  "except\s*:|catch\s*\{\s*\}" src                                     # erro engolido
+grep -rEn  "cursor\.execute|\.query\.|db\.session|db\.(run|all|get)\(" src \
+     --include='*rout*' --include='*view*' --include='*ontroller*'               # rota acessando banco
+```
+
+No projeto 3, o grep de API deprecated encontra uma ocorrência em `src/utils/helpers.py:8`, que é só uma docstring citando `datetime.utcnow()`.
