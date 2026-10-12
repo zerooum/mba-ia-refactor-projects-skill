@@ -227,24 +227,81 @@
 
 ---
 
-### Padrões recorrentes (insumo para a skill)
+## Construção da Skill
 
-| Anti-pattern | P1 (Flask) | P2 (Express) | P3 (Flask + ORM) | Severidade típica |
-|---|:-:|:-:|:-:|---|
-| Credenciais / segredos hardcoded | ✓ | ✓ | ✓ | CRITICAL |
-| Senha em texto puro ou hash fraco | ✓ | ✓ | ✓ | CRITICAL |
-| Dados sensíveis expostos em resposta ou log | ✓ | ✓ | ✓ | CRITICAL |
-| Ausência de autenticação/autorização em rotas sensíveis | ✓ | ✓ | ✓ | CRITICAL / HIGH |
-| SQL Injection | ✓ | | | CRITICAL |
-| God Class / camadas misturadas | ✓ | ✓ | ✓ (rotas gordas) | CRITICAL / HIGH |
-| Debug ativo em produção | ✓ | | ✓ | HIGH |
-| Estado global mutável | ✓ | ✓ | | HIGH |
-| Operação multi-etapa sem transação | ✓ | ✓ | | HIGH |
-| Queries N+1 | ✓ | ✓ | ✓ | MEDIUM |
-| Tratamento de erro genérico/não centralizado | ✓ | ✓ | ✓ | MEDIUM |
-| Validação de entrada ausente | ✓ | ✓ | ✓ | MEDIUM |
-| Duplicação de regras | ✓ | | ✓ | MEDIUM |
-| APIs deprecated | | (callbacks legados) | ✓ | MEDIUM |
-| Magic numbers / strings | ✓ | ✓ | ✓ | LOW |
-| Nomenclatura ruim / código morto / imports não usados | ✓ | ✓ | ✓ | LOW |
-| `print`/`console.log` como logging | ✓ | ✓ | ✓ | LOW |
+### Decisões de design
+
+Estrutura da skill:
+
+```
+refactor-arch/
+├── SKILL.md                              # orquestra as fases e define as regras
+├── references/
+│   ├── 01-analise-de-projeto.md          # detectar stack, banco, rotas e nível de organização
+│   ├── 02-catalogo-anti-patterns.md      # 21 anti-patterns + APIs deprecated + guardas anti-falso-positivo
+│   ├── 03-template-relatorio.md          # formato do relatório da Fase 2
+│   ├── 04-guidelines-mvc.md              # regras das camadas e estrutura alvo por stack
+│   ├── 05-playbook-refatoracao.md        # 15 transformações com código antes/depois
+│   └── 06-validacao.md                   # como subir a app, rodar o smoke e comparar
+└── scripts/
+    └── smoke.sh                          # chama todas as rotas e grava o status de cada uma
+```
+
+**SKILL.md como roteiro, referências como conhecimento.** O `SKILL.md` diz *o que* fazer e em que ordem. O *como* fica nos arquivos de referência. Cada referência é lida só no início da fase que a usa.
+
+**Fluxo em fases com um GATE.** A skill roda `Fase 0 (preflight) → 1 (análise) → 2 (auditoria) → GATE → 3 (refatoração)`. Até o GATE ela só lê o código. No GATE ela usa `AskUserQuestion` com três opções: prosseguir, fazer um commit de checkpoint antes, ou abortar.
+
+**Regras invioláveis e racionalizações proibidas.** O `SKILL.md` tem uma tabela de regras que valem em todas as fases: nada é escrito antes do GATE, finding sem `arquivo:linha` conferido não existe, o contrato HTTP não muda, refatorar é mover e não reescrever, segredo vai para variável de ambiente. Tem também uma tabela com os "atalhos" que o agente costuma tomar e por que eles estão errados, por exemplo: "o projeto já tem `services/`, então tem camada de serviço".
+
+**IDs ligando catálogo, playbook e ondas.** Cada anti-pattern tem um ID (`AP-01`…`AP-21`) e aponta para a transformação que o resolve (`T-01`…`T-15`). Cada transformação pertence a uma onda da Fase 3. Assim, o plano de refatoração sai direto do relatório: `finding → transformação → arquivos → onda`.
+
+**Refatoração em ondas com smoke test.** A Fase 3 roda em ondas de ordem fixa (layout `src/`, config, dados, negócio, rotas, erros/validação, higiene). Depois de cada onda, a app sobe e o `smoke.sh` compara o status de cada rota com o baseline gravado na Fase 1. Se a onda quebrar algo, ela é revertida.
+
+**Saídas com formato fixo.** Os blocos `PHASE 1`, o relatório e o `PHASE 3` têm formato definido e todas as linhas são obrigatórias. Isso deixa os resultados dos 3 projetos comparáveis.
+
+### Anti-patterns do catálogo
+
+O catálogo nasceu da análise manual: cada padrão virou uma entrada. Alguns foram acrescentados para cobrir casos comuns em outras stacks. Cada entrada tem descrição, comandos `rg` de detecção, por que importa, falsos positivos conhecidos e a transformação que resolve.
+
+| Severidade | Anti-patterns | Por que estão no catálogo |
+|---|---|---|
+| CRITICAL | AP-01 Credenciais hardcoded · AP-02 SQL Injection · AP-03 God Class · AP-04 Senha em texto puro ou hash fraco · AP-05 Endpoint sensível sem autenticação · AP-06 Dado sensível vazado na resposta | Apareceram nos 3 projetos e expõem dados ou impedem qualquer separação de camadas |
+| HIGH | AP-07 Regra de negócio na rota · AP-08 Acoplamento sem injeção de dependência · AP-09 Estado global mutável · AP-10 Camada pulada · AP-11 Erro engolido / sem handler central · AP-12 Escrita múltipla sem transação · AP-13 Callback hell · AP-14 Camada fantasma | São as violações de MVC/SOLID que a Fase 3 precisa desfazer. AP-10 e AP-14 existem por causa do `task-manager-api`, que tem pastas de camada sem responsabilidade real |
+| MEDIUM | AP-15 N+1 · AP-16 Validação ausente ou divergente · AP-17 Duplicação · AP-18 API deprecated · AP-19 Config ou middleware inseguro | Problemas de performance e padronização encontrados nos 3 projetos |
+| LOW | AP-20 Magic numbers/strings · AP-21 Ruído de legibilidade | Imports não usados, `print` como log, nomes ruins e código verboso |
+
+Além da lista, o catálogo traz:
+
+- **Tabelas de APIs deprecated** para Python (`datetime.utcnow()`, `Model.query.get()`…) e Node (`new Buffer`, `url.parse`, driver em callback…), com o equivalente moderno, mais uma forma genérica de detectar: ler os warnings do boot.
+- **Regra de agrupamento:** 20 ocorrências do mesmo problema viram 1 finding com 20 linhas, não 20 findings.
+- **Regra de promoção:** um MEDIUM sobe para HIGH quando atinge login, pagamento ou dado pessoal.
+- **Guardas anti-falso-positivo:** casos que parecem problema mas não são (ver Desafios).
+
+### Como a skill é agnóstica de tecnologia
+
+- **Detecção pelo manifesto, não pela extensão.** `requirements.txt`, `package.json`, `go.mod`, `pom.xml`, `Cargo.toml` etc. dizem a linguagem e as versões. O framework é confirmado pela dependência **e** pela assinatura de rota (`@app.route`, `app.get(`, `@GetMapping`…), com tabela para 10 frameworks.
+- **Sinais de detecção cobrem várias sintaxes.** Os comandos `rg` do catálogo pegam concatenação com `+`, f-string do Python e template literal do JS no mesmo padrão.
+- **Estrutura alvo por stack, com fallback genérico.** `04-guidelines-mvc.md` define a estrutura para Flask, Express e uma versão genérica (`config · models · controllers · views/routes · middlewares · infra`).
+- **Receita por nível de organização, não por linguagem.** A Fase 1 classifica o projeto como monolito flat, camadas nominais ou camadas reais, e a Fase 3 aplica a receita do nível. Um projeto Flask flat e um Express flat recebem o mesmo tratamento.
+- **Validação por HTTP.** O `smoke.sh` usa só `curl` e um `rotas.tsv` montado na Fase 1. Não depende de suíte de testes nem da linguagem do projeto.
+- **Prova prática:** a pasta da skill foi copiada sem nenhuma alteração para os 3 projetos (`diff -r` entre as cópias é vazio) e rodou em Python/Flask com `sqlite3` puro, em Node/Express com callbacks e em Python/Flask com SQLAlchemy.
+
+### Desafios encontrados
+
+**1. Onde o código deveria terminar.** A primeira versão não dizia onde o código refatorado devia ficar. No `code-smells-project`, o `app.py` da raiz ficou como launcher chamando `src/app.py`. No `task-manager-api`, as camadas já existiam na raiz e a mudança para `src/` só aconteceu na última onda, depois de os arquivos já terem sido editados, então o git perde o histórico de rename.
+**Solução:** criei a regra "código da aplicação termina em `src/`", a transformação T-15 e a **onda 0** (`git mv` puro, antes de qualquer edição). Também acrescentei uma tabela com o que quebra ao mover (comando de boot, `instance_path` do Flask, SQLite relativo, `main` do `package.json`) e uma checagem de que a app sobe a partir de outro diretório. A atualização foi aplicada nas 3 cópias da skill.
+
+**2. Corrigir segurança sem quebrar os clientes.** Proteger `/admin/*` ou o `DELETE /api/users/:id` muda o status de 200 para 401, e o smoke test acusa divergência.
+**Solução:** a regra "o contrato HTTP não muda" e uma seção **Breaking changes propostos** no relatório. Tudo que altera o contrato é listado ali e só é aplicado se aprovado no GATE. No fim, as divergências do smoke são justificadas uma a uma (ex.: no projeto 1, 30/33 idênticas, e as 3 diferentes são o 401 aprovado).
+
+**3. Falsos positivos na auditoria.** O grep de SQL injection marca `` `Checkout curso ${cid}` `` em `AppManager.js:57`, mas a interpolação está no array de parâmetros, não no SQL. No `task-manager-api`, `Task.title.like(f'%{q}%')` parece injection, mas o ORM parametriza.
+**Solução:** a tabela de **guardas anti-falso-positivo** e a regra "o grep localiza, a leitura confirma". O relatório do projeto 2 registra que não há SQL injection, e o do projeto 3 classifica o `like` como LOW (só falta escapar `%`/`_`).
+
+**4. Projeto parcialmente organizado engana.** No `task-manager-api`, a existência de `services/` e `utils/` fazia parecer que as camadas estavam separadas, mas nenhuma rota importava esses módulos.
+**Solução:** três testes objetivos para o nível "camadas nominais" (o service é importado? a rota faz query? o método do model é chamado?), os anti-patterns AP-10 (camada pulada) e AP-14 (camada fantasma), e a exigência de registrar no plano, para cada módulo morto, se ele será usado ou removido. No projeto 3, `is_overdue` e `validate_*` foram reaproveitados, e `NotificationService`, `marshmallow` e `requests` foram removidos.
+
+**5. Validar sem testes automatizados.** Nenhum dos 3 projetos tem suíte de testes.
+**Solução:** capturar um baseline na Fase 1 (app rodando + `smoke.sh` em todas as rotas) e repetir o smoke depois de cada onda, comparando os arquivos `.status`. Uma onda que quebra algo é revertida antes da próxima.
+
+**6. Segredos que continuam no histórico do git.** Mover a `SECRET_KEY` para variável de ambiente não apaga o valor dos commits antigos.
+**Solução:** o `.env.example` recebe só placeholder (`CHANGE_ME`), o `.env` vai para o `.gitignore`, e o relatório final de cada projeto termina com a ação obrigatória de rotacionar os segredos expostos.
